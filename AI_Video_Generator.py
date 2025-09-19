@@ -2,11 +2,10 @@ import streamlit as st
 import random
 import tempfile
 import base64
-import time
 from gtts import gTTS
-import speech_recognition as sr
-from pydub import AudioSegment
+from moviepy.editor import TextClip, CompositeVideoClip, AudioFileClip, ColorClip
 
+# -------------------------------
 # Sample sentences
 sample_sentences = {
     "PRE-KG": ["A B C D.", "Red, blue, green.", "One, two, three, four."],
@@ -14,6 +13,7 @@ sample_sentences = {
     "PhD": ["Computational fluid dynamics governs complex flow behavior in turbulent regimes."]
 }
 
+# -------------------------------
 # Generate text
 def generate_text(level, minutes):
     total_words = minutes * 20
@@ -27,83 +27,62 @@ def generate_text(level, minutes):
             last = choice
     return paragraph.strip()
 
-# Speak text
-def speak_text(text):
+# -------------------------------
+# Convert text to speech
+def text_to_speech(text):
     tts = gTTS(text)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        tts.save(f.name)
-    with open(f.name, "rb") as af:
-        b64 = base64.b64encode(af.read()).decode()
-    st.markdown(f"""
-        <audio autoplay controls style="width:100%;">
-          <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-        </audio>
-    """, unsafe_allow_html=True)
+    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(temp_audio.name)
+    return temp_audio.name
 
-# Compare words
-def compare_text(expected, spoken):
-    expected_words = expected.lower().split()
-    spoken_words = spoken.lower().split()
-    result = []
-    correct = 0
-    for i, word in enumerate(expected_words):
-        if i < len(spoken_words) and spoken_words[i] == word:
-            result.append(f"<span style='color:green'>{word}</span>")
-            correct += 1
-        elif i < len(spoken_words):
-            result.append(f"<span style='color:red'>{spoken_words[i]}</span>")
-        else:
-            result.append(f"<span style='color:gray'>{word}</span>")
-    return " ".join(result), correct, len(spoken_words)
+# -------------------------------
+# Generate video
+def generate_video(text, audio_path, duration=10):
+    # Background color video
+    bg = ColorClip(size=(1280, 720), color=(30, 30, 30), duration=duration)
 
+    # Add text on video
+    txt_clip = TextClip(text, fontsize=40, color='white', size=(1000, None), method='caption', align='center')
+    txt_clip = txt_clip.set_position('center').set_duration(duration)
+
+    # Add audio
+    audio = AudioFileClip(audio_path)
+    bg = bg.set_audio(audio)
+
+    # Merge
+    video = CompositeVideoClip([bg, txt_clip])
+    
+    # Save final video
+    output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    video.write_videofile(output_path, fps=24)
+    return output_path
+
+# -------------------------------
 # UI
-st.set_page_config(page_title="🗣️ AI Reading App", layout="centered")
-st.title("🧠 AI Reading App: PRE-KG to PhD")
+st.set_page_config(page_title="🎥 AI Video Generator", layout="centered")
+st.title("🎬 AI Video Generator: PRE-KG to PhD")
 
 level = st.selectbox("Select your level:", list(sample_sentences.keys()))
-minutes = st.slider("Reading time (minutes):", 1, 5, 1)
+minutes = st.slider("Video length (minutes):", 1, 3, 1)
 
 target_text = generate_text(level, minutes)
-
-st.subheader("Read the following:")
+st.subheader("Generated Text:")
 st.markdown(f"<div style='background:#f0f8ff;padding:15px'>{target_text}</div>", unsafe_allow_html=True)
 
-if st.button("🔊 Listen"):
-    speak_text(target_text)
+if st.button("🎥 Generate Video"):
+    with st.spinner("Generating speech..."):
+        audio_file = text_to_speech(target_text)
 
-st.subheader("🎤 Upload your recording")
-uploaded_audio = st.file_uploader("Upload WAV/MP3 audio", type=["wav", "mp3"])
+    with st.spinner("Generating video..."):
+        video_file = generate_video(target_text, audio_file, duration=minutes*10)  # 10 sec per minute
+    
+    st.success("✅ Video generated successfully!")
 
-if uploaded_audio:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
-        f.write(uploaded_audio.read())
-        temp_path = f.name
+    # Show video
+    video_bytes = open(video_file, "rb").read()
+    st.video(video_bytes)
 
-    audio = AudioSegment.from_file(temp_path)
-    wav_path = temp_path.replace(".mp3", ".wav")
-    audio.export(wav_path, format="wav")
-
-    st.audio(wav_path, format="audio/wav")
-
-    recognizer = sr.Recognizer()
-    with sr.AudioFile(wav_path) as source:
-        audio_data = recognizer.record(source)
-        start = time.time()
-        try:
-            spoken = recognizer.recognize_google(audio_data)
-            end = time.time()
-            st.success(f"Recognized Speech: {spoken}")
-            diff_html, correct, total = compare_text(target_text, spoken)
-            st.markdown("### 🧾 Word Comparison:")
-            st.markdown(diff_html, unsafe_allow_html=True)
-            wpm = (len(spoken.split()) / (end - start)) * 60
-            st.info(f"📈 Words Per Minute: **{wpm:.2f}**")
-            accuracy = (correct / total) * 100 if total else 0
-            st.info(f"✅ Accuracy: **{accuracy:.2f}%**")
-        except sr.UnknownValueError:
-            st.error("Could not understand the audio.")
-        except sr.RequestError as e:
-            st.error(f"API error: {e}")
-
-st.markdown("---")
-st.caption("Developed by Dr. Raju Murugan 💡 | Streamlit + gTTS + SpeechRecognition")
+    # Download option
+    b64 = base64.b64encode(video_bytes).decode()
+    href = f'<a href="data:video/mp4;base64,{b64}" download="output.mp4">📥 Download Video</a>'
+    st.markdown(href, unsafe_allow_html=True)
